@@ -1,0 +1,34 @@
+{
+  "name": "futures-strategy-lab",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --webpack",
+    "dev:all": "scripts/dev-local.sh",
+    "dev:backend": "cd backend && . .venv/bin/activate && uvicorn app.main:app --host 127.0.0.1 --port ${API_PORT:-8001} --reload",
+    "build": "next build --webpack",
+    "start": "next start",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lightweight-charts": "^4.2.3",
+    "lucide-react": "^0.468.0",
+    "next": "^16.1.6",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "tailwind-merge": "^2.6.0"
+  },
+  "devDependencies": {
+    "@next/swc-wasm-nodejs": "^16.2.9",
+    "@tailwindcss/postcss": "^4.1.0",
+    "@types/node": "^22.10.5",
+    "@types/react": "^19.0.3",
+    "@types/react-dom": "^19.0.2",
+    "eslint": "^9.17.0",
+    "eslint-config-next": "^16.1.6",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.7.2"
+  }
+}

@@ -38,6 +38,14 @@ function errorMessage(detail: unknown): string {
   return "Request failed";
 }
 
+function sweepErrorLabel(error?: string): string {
+  if (!error) return "";
+  if (error.startsWith("No candles found in market hours window")) {
+    return "Market holiday / unavailable";
+  }
+  return error;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -324,7 +332,7 @@ export function LabDashboard() {
           row.metrics?.profit_factor ?? "",
           row.metrics?.max_drawdown,
           row.metrics?.average_trade_pnl,
-          row.error ?? "",
+          sweepErrorLabel(row.error),
         ]);
       }
     }
@@ -598,7 +606,7 @@ export function LabDashboard() {
                               <tr className="border-b border-border/70 last:border-0 hover:bg-muted/35" key={`${group.strategy}-${row.date}`}>
                                 <td className="whitespace-nowrap px-3 py-2.5 font-mono">{row.date}</td>
                                 {row.error ? (
-                                  <td className="px-3 py-2.5 text-negative" colSpan={7}>{row.error}</td>
+                                  <td className="px-3 py-2.5 text-muted-foreground" colSpan={7}>{sweepErrorLabel(row.error)}</td>
                                 ) : row.metrics ? (
                                   <>
                                     <td className="px-3 py-2.5 font-mono">{row.metrics.total_trades}</td>

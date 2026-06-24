@@ -7,6 +7,7 @@ import { EquityChart } from "@/components/equity-chart";
 import { MarketChart } from "@/components/market-chart";
 import { MetricStrip } from "@/components/metric-strip";
 import { TradeTable } from "@/components/trade-table";
+import { SweepCharts } from "@/components/sweep-charts";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -109,6 +110,8 @@ type PersistedSettings = {
   spread: number;
   stopLoss: number;
   takeProfit: number;
+  windowStart: string;
+  windowEnd: string;
 };
 
 function readStoredSettings(): Partial<PersistedSettings> {
@@ -132,12 +135,13 @@ function NumericField({ id, label, value, step = 1, min = 0, max, onChange }: { 
   return <div className="space-y-1.5"><Label htmlFor={id}>{label}</Label><Input id={id} min={min} max={max} onChange={(e) => onChange(Number(e.target.value))} step={step} type="number" value={value} /></div>;
 }
 
-const STRATEGY_LABELS: Record<StrategyType, string> = { ema_crossover: "EMA crossover", sma_crossover: "SMA crossover", bollinger_bands: "Bollinger Bands", rsi_mean_reversion: "RSI mean-reversion" };
-const ALL_STRATEGIES: StrategyType[] = ["ema_crossover", "sma_crossover", "bollinger_bands", "rsi_mean_reversion"];
+const STRATEGY_LABELS: Record<StrategyType, string> = { ema_crossover: "EMA crossover", sma_crossover: "SMA crossover", bollinger_bands: "Bollinger Bands", rsi_mean_reversion: "RSI mean-reversion", macd: "MACD crossover", vwap: "VWAP mean-reversion" };
+const ALL_STRATEGIES: StrategyType[] = ["ema_crossover", "sma_crossover", "bollinger_bands", "rsi_mean_reversion", "macd", "vwap"];
 
-type SweepRow = { date: string; strategy: string; metrics?: Metrics; error?: string };
-type StrategySweepGroup = {
+type SweepRow = { date: string; strategy: string; interval?: string; metrics?: Metrics; error?: string };
+export type StrategySweepGroup = {
   strategy: string;
+  interval?: string;
   label: string;
   rows: SweepRow[];
   totalNetPnl: number;
@@ -179,7 +183,10 @@ export function LabDashboard() {
   const [slippage, setSlippage] = useState(() => storedSettings.slippage ?? 1);
   const [spread, setSpread] = useState(() => storedSettings.spread ?? 1);
   const [stopLoss, setStopLoss] = useState(() => storedSettings.stopLoss ?? 0);
+  const [compareIntervals, setCompareIntervals] = useState(false);
   const [takeProfit, setTakeProfit] = useState(() => storedSettings.takeProfit ?? 0);
+  const [windowStart, setWindowStart] = useState(() => storedSettings.windowStart ?? "");
+  const [windowEnd, setWindowEnd] = useState(() => storedSettings.windowEnd ?? "");
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [sweepResults, setSweepResults] = useState<SweepRow[] | null>(null);
   const [sweepSort, setSweepSort] = useState<{ key: "date" | "strategy" | keyof Metrics; direction: "asc" | "desc" }>({ key: "net_pnl", direction: "desc" });
@@ -198,7 +205,7 @@ export function LabDashboard() {
       rsiPeriod, rsiOverbought, rsiOversold, initialCapital, contracts, commission,
       slippage, spread, stopLoss, takeProfit,
     } satisfies PersistedSettings));
-  }, [bbPeriod, bbStddev, commission, contract, contracts, fastPeriod, initialCapital, interval, rsiOverbought, rsiOversold, rsiPeriod, slowPeriod, slippage, spread, stopLoss, strategy, sweepStrats, takeProfit]);
+  }, [bbPeriod, bbStddev, commission, contract, contracts, fastPeriod, initialCapital, interval, rsiOverbought, rsiOversold, rsiPeriod, slowPeriod, slippage, spread, stopLoss, strategy, sweepStrats, takeProfit, windowStart, windowEnd]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -206,7 +213,7 @@ export function LabDashboard() {
 
     async function loadAvailableDates() {
       try {
-        const params = new URLSearchParams({ contract, interval });
+        const params = new URLSearchParams({ contract, interval, refresh: "true" });
         const resp = await fetch(`${API_URL}/api/available-dates?${params.toString()}`, {
           signal: controller.signal,
         });
@@ -249,6 +256,8 @@ export function LabDashboard() {
     initial_capital: String(initialCapital), contracts: String(contracts),
     commission_per_side: String(commission), slippage_ticks: String(slippage),
     spread_ticks: String(spread), stop_loss_points: String(stopLoss), take_profit_points: String(takeProfit),
+    ...(windowStart ? { window_start: windowStart } : {}),
+    ...(windowEnd ? { window_end: windowEnd } : {}),
   });
 
   async function runSingle() {
@@ -268,12 +277,17 @@ export function LabDashboard() {
   async function runSweep() {
     setError(null); setSweepResults(null); setIsRunning(true);
     try {
-      const p = new URLSearchParams({ start_date: startDate, end_date: endDate, strategies: sweepStrats.join(","), ...commonParams() });
-      const resp = await fetch(`${API_URL}/api/sweep?${p.toString()}`);
-      const payload = await resp.json();
-      if (!resp.ok) throw new Error(errorMessage(payload.detail));
-      if (!isSweepRows(payload)) throw new Error("Sweep response was not recognized");
-      setSweepResults(payload);
+      const intervals = compareIntervals ? ["1m", "5m"] : [interval];
+      let allRows: SweepRow[] = [];
+      for (const intv of intervals) {
+        const p = new URLSearchParams({ start_date: startDate, end_date: endDate, strategies: sweepStrats.join(","), ...commonParams(), interval: intv });
+        const resp = await fetch(`${API_URL}/api/sweep?${p.toString()}`);
+        const payload = await resp.json();
+        if (!resp.ok) throw new Error(errorMessage(payload.detail));
+        if (!isSweepRows(payload)) throw new Error("Sweep response was not recognized");
+        allRows = allRows.concat(payload.map((r: SweepRow) => ({ ...r, interval: intv })));
+      }
+      setSweepResults(allRows);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Backend unreachable");
     } finally { setIsRunning(false); }
@@ -360,7 +374,8 @@ export function LabDashboard() {
     : null;
   const strategyGroups: StrategySweepGroup[] = Object.values(
     (sweepResults ?? []).reduce<Record<string, SweepRow[]>>((groups, row) => {
-      groups[row.strategy] = [...(groups[row.strategy] ?? []), row];
+      const key = row.interval ? `${row.strategy}@${row.interval}` : row.strategy;
+      groups[key] = [...(groups[key] ?? []), row];
       return groups;
     }, {}),
   ).map((rows) => {
@@ -372,9 +387,11 @@ export function LabDashboard() {
     const maxDrawdown = metricRows.reduce((max, row) => Math.max(max, row.metrics?.max_drawdown ?? 0), 0);
     const byPnl = [...metricRows].sort((a, b) => (a.metrics?.net_pnl ?? 0) - (b.metrics?.net_pnl ?? 0));
     const strategyKey = sortedRows[0]?.strategy ?? "";
+    const intv = sortedRows[0]?.interval;
     return {
       strategy: strategyKey,
-      label: STRATEGY_LABELS[strategyKey as StrategyType] ?? strategyKey,
+      interval: intv,
+      label: (STRATEGY_LABELS[strategyKey as StrategyType] ?? strategyKey) + (intv ? ` ${intv}` : ""),
       rows: sortedRows,
       totalNetPnl,
       tradingDays: metricRows.length,
@@ -414,7 +431,7 @@ export function LabDashboard() {
   const bestStrategyPnl = strategyGroups.length ? Math.max(...strategyGroups.map((group) => group.totalNetPnl)) : null;
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="min-h-screen bg-background text-foreground" suppressHydrationWarning>
       <header className="border-b border-border bg-background/95">
         <div className="mx-auto flex h-16 max-w-[1720px] items-center justify-between px-4 sm:px-6">
           <div className="flex items-center gap-3">
@@ -464,9 +481,8 @@ export function LabDashboard() {
                     <div className="space-y-1.5"><Label htmlFor="sweep-start">Start</Label><Input id="sweep-start" max={today()} onChange={(e) => setStartDate(e.target.value)} type="date" value={startDate} /></div>
                     <div className="space-y-1.5"><Label htmlFor="sweep-end">End</Label><Input id="sweep-end" max={today()} onChange={(e) => setEndDate(e.target.value)} type="date" value={endDate} /></div>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 gap-3">
                     <div className="space-y-1.5"><Label htmlFor="sweep-contract">Contract</Label><Select id="sweep-contract" onChange={(e) => setContract(e.target.value as ContractType)} value={contract}>{(["MES","MNQ","ES","NQ"] as ContractType[]).map((s) => <option key={s} value={s}>{s}</option>)}</Select></div>
-                    <div className="space-y-1.5"><Label htmlFor="sweep-interval">Interval</Label><Select id="sweep-interval" onChange={(e) => setInterval(e.target.value)} value={interval}><option value="1m">1m</option><option value="5m">5m</option></Select></div>
                   </div>
                   <div className="space-y-1.5">
                     <Label>Strategies</Label>
@@ -480,6 +496,21 @@ export function LabDashboard() {
                       ))}
                     </div>
                   </div>
+                  <div className="space-y-1.5">
+                    <Label>Intervals</Label>
+                    <div className="flex gap-3">
+                      <label className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-xs transition-colors ${compareIntervals ? 'border-primary/40 bg-primary/8' : interval === '1m' ? 'border-primary/40 bg-primary/8' : 'border-border hover:bg-muted/50'}`}>
+                        <input checked={compareIntervals || interval === '1m'} className="sr-only" onChange={() => { if (compareIntervals) { setCompareIntervals(false); setInterval('5m'); } else if (interval === '1m') { return; } else { setCompareIntervals(true); } }} type="checkbox" />
+                        <span className={`flex size-3 items-center justify-center rounded border ${compareIntervals || interval === '1m' ? 'border-primary bg-primary' : 'border-border'}`}>{compareIntervals || interval === '1m' ? <svg className="size-2.5 text-primary-foreground" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 6l2 2 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg> : null}</span>
+                        1m
+                      </label>
+                      <label className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-xs transition-colors ${compareIntervals ? 'border-primary/40 bg-primary/8' : interval === '5m' ? 'border-primary/40 bg-primary/8' : 'border-border hover:bg-muted/50'}`}>
+                        <input checked={compareIntervals || interval === '5m'} className="sr-only" onChange={() => { if (compareIntervals) { setCompareIntervals(false); setInterval('1m'); } else if (interval === '5m') { return; } else { setCompareIntervals(true); } }} type="checkbox" />
+                        <span className={`flex size-3 items-center justify-center rounded border ${compareIntervals || interval === '5m' ? 'border-primary bg-primary' : 'border-border'}`}>{compareIntervals || interval === '5m' ? <svg className="size-2.5 text-primary-foreground" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 6l2 2 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg> : null}</span>
+                        5m
+                      </label>
+                    </div>
+                  </div>
                 </>
               )}
 
@@ -491,6 +522,7 @@ export function LabDashboard() {
                   <NumericField id="slippage" label="Slippage (ticks)" onChange={setSlippage} step={0.25} value={slippage} />
                   <NumericField id="spread" label="Spread (ticks)" onChange={setSpread} step={0.25} value={spread} />
                   <div className="grid grid-cols-2 gap-3"><NumericField id="stop" label="Stop loss (pts)" onChange={setStopLoss} step={1} value={stopLoss} /><NumericField id="target" label="Take profit (pts)" onChange={setTakeProfit} step={1} value={takeProfit} /></div>
+                  <div className="grid grid-cols-2 gap-3"><div className="space-y-1.5"><Label htmlFor="win-start">Window start (ET)</Label><Input id="win-start" onChange={(e) => setWindowStart(e.target.value)} placeholder="08:30" type="time" value={windowStart} /></div><div className="space-y-1.5"><Label htmlFor="win-end">Window end (ET)</Label><Input id="win-end" onChange={(e) => setWindowEnd(e.target.value)} placeholder="17:00" type="time" value={windowEnd} /></div></div>
                 </div>
               </details>
 
@@ -535,6 +567,7 @@ export function LabDashboard() {
             </>
           ) : mode === "sweep" && sweepResults ? (
             <div className="space-y-5">
+              {strategyGroups.length > 0 && <SweepCharts groups={strategyGroups} />}
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="text-sm font-semibold">Sweep results</h2>

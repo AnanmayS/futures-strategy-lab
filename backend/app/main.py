@@ -7,9 +7,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 from .backtest import filter_frame_by_date, run_backtest
-from .live_backtest import DEFAULT_MIN_CANDLES, list_available_backtest_dates, run_live_backtest
+from .live_backtest import DEFAULT_MIN_CANDLES, _market_window, list_available_backtest_dates, run_live_backtest
 from .market_data import fetch_futures_data
 from .models import BacktestConfig
+
+import logging
+logger = logging.getLogger(__name__)
+
+
+def _warmup_recent(contract: str, interval: str) -> None:
+    """Silently try fetching today and yesterday to populate cache."""
+    from datetime import date, timedelta
+    today = date.today()
+    for day_offset in (0, 1):
+        try:
+            target = (today - timedelta(days=day_offset)).isoformat()
+            run_live_backtest(target, contract=contract, strategy="ema_crossover", interval=interval, use_cache=False)
+        except Exception:
+            pass  # silently skip days without data
 
 
 REQUIRED_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
@@ -58,10 +73,13 @@ async def available_dates(
     contract: str = Query(default="MES", description="Contract: MES, ES, MNQ, NQ"),
     interval: str = Query(default="5m", description="Bar interval: 1m, 5m, 15m, 30m, 1h, 1d"),
     min_candles: int = Query(default=DEFAULT_MIN_CANDLES, ge=1, description="Minimum market-hours candles required"),
+    refresh: bool = Query(default=False, description="Try fetching today/yesterday before scanning cache"),
 ) -> dict:
     contract_upper = contract.upper()
     if contract_upper not in ("MES", "ES", "MNQ", "NQ"):
         raise HTTPException(status_code=400, detail="Contract must be one of: MES, ES, MNQ, NQ")
+    if refresh:
+        _warmup_recent(contract_upper, interval)
     try:
         return list_available_backtest_dates(
             contract=contract_upper,
@@ -92,6 +110,8 @@ async def backtest_live(
     spread_ticks: float = Query(default=1.0, ge=0),
     stop_loss_points: float = Query(default=0, ge=0, description="Stop-loss in points (0 = disabled)"),
     take_profit_points: float = Query(default=0, ge=0, description="Take-profit in points (0 = disabled)"),
+    window_start: str | None = Query(default=None, description="Trading window start ET (HH:MM, e.g. 09:30)"),
+    window_end: str | None = Query(default=None, description="Trading window end ET (HH:MM, e.g. 11:30)"),
 ) -> dict:
     contract_upper = contract.upper()
     if contract_upper not in ("MES", "ES", "MNQ", "NQ"):
@@ -118,6 +138,8 @@ async def backtest_live(
             spread_ticks=spread_ticks,
             stop_loss_points=stop_loss_points,
             take_profit_points=take_profit_points,
+            window_start=window_start,
+            window_end=window_end,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -144,11 +166,13 @@ async def sweep(
     spread_ticks: float = Query(default=1.0, ge=0),
     stop_loss_points: float = Query(default=0, ge=0),
     take_profit_points: float = Query(default=0, ge=0),
+    window_start: str | None = Query(default=None, description="Trading window start ET (HH:MM)"),
+    window_end: str | None = Query(default=None, description="Trading window end ET (HH:MM)"),
 ) -> list[dict]:
     from datetime import timedelta as td
 
     strategy_list = [s.strip() for s in strategies.split(",") if s.strip()]
-    valid = {"ema_crossover", "sma_crossover", "bollinger_bands", "rsi_mean_reversion"}
+    valid = {"ema_crossover", "sma_crossover", "bollinger_bands", "rsi_mean_reversion", "macd", "vwap"}
     for s in strategy_list:
         if s not in valid:
             raise HTTPException(status_code=400, detail=f"Unknown strategy: {s}")
@@ -185,6 +209,8 @@ async def sweep(
                     spread_ticks=spread_ticks,
                     stop_loss_points=stop_loss_points,
                     take_profit_points=take_profit_points,
+                    window_start=window_start,
+                    window_end=window_end,
                 )
                 results.append({
                     "date": current.isoformat(),

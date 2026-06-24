@@ -144,6 +144,8 @@ def run_live_backtest(
     rsi_period: int = 14,
     rsi_overbought: float = 70.0,
     rsi_oversold: float = 30.0,
+    window_start: str | None = None,
+    window_end: str | None = None,
     use_cache: bool = True,
 ) -> dict[str, Any]:
     """
@@ -179,6 +181,8 @@ def run_live_backtest(
         rsi_period=rsi_period,
         rsi_overbought=rsi_overbought,
         rsi_oversold=rsi_oversold,
+        window_start=window_start,
+        window_end=window_end,
         backtest_date=parsed_date,
     )
 
@@ -241,6 +245,24 @@ def run_live_backtest(
             f"No candles found in market hours window ({open_dt.isoformat()} → {close_dt.isoformat()}) "
             f"for {target_date}. The market may have been closed or no data is available."
         )
+
+    # Apply trading window filter (optional — narrows to specific intraday times)
+    if config.window_start or config.window_end:
+        from datetime import time as dt_time
+        win_start = dt_time.fromisoformat(config.window_start) if config.window_start else MARKET_OPEN_ET
+        win_end = dt_time.fromisoformat(config.window_end) if config.window_end else MARKET_CLOSE_ET
+        windowed = []
+        for c in market_candles:
+            ts = pd.Timestamp(c["time"])
+            ts_et = ts.tz_convert(ET) if ts.tzinfo else ts.tz_localize("UTC").tz_convert(ET)
+            if win_start <= ts_et.time() <= win_end:
+                windowed.append(c)
+        market_candles = windowed
+        if not market_candles:
+            raise ValueError(
+                f"No candles in trading window {config.window_start or '08:30'}–{config.window_end or '17:00'} ET "
+                f"for {target_date}."
+            )
 
     # Convert to DataFrame for backtest engine (still UTC internally)
     rows = []

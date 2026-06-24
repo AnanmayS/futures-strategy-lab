@@ -30,8 +30,29 @@ export function MarketChart({ result }: { result: BacktestResult }) {
       timeScale: { borderColor: "rgba(83, 83, 76, 0.14)", timeVisible: true, secondsVisible: false, rightOffset: 4 },
       localization: { priceFormatter: (price: number) => price.toFixed(2) },
     });
+
+    // ── Candles ──
     const candles = chart.addCandlestickSeries({ upColor: "#257a62", downColor: "#bf5b45", wickUpColor: "#257a62", wickDownColor: "#bf5b45", borderVisible: false });
     candles.setData(result.candles.map(({ time, open, high, low, close }) => ({ time: chartTime(time), open, high, low, close })));
+
+    // ── Volume bars (histogram on separate scale) ──
+    const volumeSeries = chart.addHistogramSeries({
+      priceFormat: { type: "volume" },
+      priceScaleId: "volume",
+    });
+    chart.priceScale("volume").applyOptions({
+      scaleMargins: { top: 0.82, bottom: 0 },
+      visible: false,
+    });
+    volumeSeries.setData(
+      result.candles.map((c) => ({
+        time: chartTime(c.time),
+        value: c.volume || 0,
+        color: c.close >= c.open ? "rgba(37, 122, 98, 0.35)" : "rgba(191, 91, 69, 0.35)",
+      }))
+    );
+
+    // ── Indicator lines ──
     const indicatorSeries = [
       { key: "fast_ema", title: "Fast EMA", color: "#c07a24" },
       { key: "slow_ema", title: "Slow EMA", color: "#6a65a8" },
@@ -40,6 +61,7 @@ export function MarketChart({ result }: { result: BacktestResult }) {
       { key: "bb_upper", title: "BB upper", color: "#6a65a8" },
       { key: "bb_middle", title: "BB middle", color: "#73746f" },
       { key: "bb_lower", title: "BB lower", color: "#6a65a8" },
+      { key: "vwap", title: "VWAP", color: "#3b82f6" },
     ] as const;
 
     for (const item of indicatorSeries) {
@@ -49,23 +71,78 @@ export function MarketChart({ result }: { result: BacktestResult }) {
       line.setData(data);
     }
 
-    const markers: SeriesMarker<Time>[] = result.trades.flatMap((trade) => [
-      {
+    // ── MACD sub-pane (separate scale — values are near 0, not 7400) ──
+    const macdData = indicatorLine(result, "macd_line");
+    const macdSigData = indicatorLine(result, "macd_signal");
+    if (macdData.length || macdSigData.length) {
+      const macdLine = chart.addLineSeries({
+        color: "#c07a24", lineWidth: 1.5, priceLineVisible: false,
+        lastValueVisible: false, title: "MACD", priceScaleId: "macd",
+      });
+      macdLine.setData(macdData);
+      if (macdSigData.length) {
+        const sigLine = chart.addLineSeries({
+          color: "#6a65a8", lineWidth: 1.5, priceLineVisible: false,
+          lastValueVisible: false, title: "MACD Signal", priceScaleId: "macd",
+        });
+        sigLine.setData(macdSigData);
+      }
+      chart.priceScale("macd").applyOptions({
+        scaleMargins: { top: 0.05, bottom: 0.75 },
+        visible: true,
+      });
+    }
+
+    // ── RSI sub-pane (separate 0-100 scale) ──
+    const rsiData = indicatorLine(result, "rsi");
+    if (rsiData.length) {
+      const rsiSeries = chart.addLineSeries({
+        color: "#c07a24",
+        lineWidth: 1.5,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        title: "RSI",
+        priceScaleId: "rsi",
+      });
+      rsiSeries.setData(rsiData);
+      chart.priceScale("rsi").applyOptions({
+        scaleMargins: { top: 0.05, bottom: 0.75 },
+        visible: true,
+      });
+    }
+
+    // ── Trade markers (deduplicate overlapping timestamps) ──
+    const rawMarkers: { time: number; position: string; color: string; shape: string; text: string }[] = [];
+    result.trades.forEach((trade) => {
+      rawMarkers.push({
         time: chartTime(trade.entry_time),
         position: trade.direction === "long" ? "belowBar" : "aboveBar",
         color: trade.direction === "long" ? "#257a62" : "#bf5b45",
         shape: trade.direction === "long" ? "arrowUp" : "arrowDown",
         text: trade.direction === "long" ? "Long" : "Short",
-      },
-      {
+      });
+      rawMarkers.push({
         time: chartTime(trade.exit_time),
         position: trade.direction === "long" ? "aboveBar" : "belowBar",
         color: "#6a65a8",
         shape: "circle",
         text: `Exit ${trade.net_pnl >= 0 ? "+" : ""}$${trade.net_pnl.toFixed(0)}`,
-      },
-    ]);
-    markers.sort((a, b) => Number(a.time) - Number(b.time));
+      });
+    });
+    rawMarkers.sort((a, b) => a.time - b.time);
+    // Spread overlapping markers: if same timestamp, offset by 1s each
+    const markers: SeriesMarker<Time>[] = [];
+    let lastTime = 0;
+    let offset = 0;
+    for (const m of rawMarkers) {
+      if (m.time === lastTime) {
+        offset++;
+      } else {
+        offset = 0;
+        lastTime = m.time;
+      }
+      markers.push({ ...m, time: (m.time + offset) as UTCTimestamp });
+    }
     candles.setMarkers(markers);
     chart.timeScale().fitContent();
     return () => chart.remove();
@@ -75,5 +152,5 @@ export function MarketChart({ result }: { result: BacktestResult }) {
     return <div className="grid h-[460px] place-items-center px-5 text-center text-sm text-muted-foreground">No candles to chart for this run.</div>;
   }
 
-  return <div ref={containerRef} className="h-[460px] w-full" aria-label="Candlestick chart with strategy lines and trade markers" />;
+  return <div ref={containerRef} className="h-[460px] w-full" aria-label="Candlestick chart with strategy lines, volume bars, and trade markers" />;
 }

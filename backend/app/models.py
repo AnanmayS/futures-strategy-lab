@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 ContractType = Literal["MES", "MNQ", "ES", "NQ"]
-StrategyType = Literal["ema_crossover", "sma_crossover", "bollinger_bands", "rsi_mean_reversion"]
+StrategyType = Literal["ema_crossover", "sma_crossover", "bollinger_bands", "rsi_mean_reversion", "macd", "vwap"]
 
 
 class BacktestConfig(BaseModel):
@@ -17,6 +17,10 @@ class BacktestConfig(BaseModel):
     spread_ticks: float = Field(default=1, ge=0)
     stop_loss_points: float = Field(default=0, ge=0, description="Stop-loss in points (0 = disabled)")
     take_profit_points: float = Field(default=0, ge=0, description="Take-profit in points (0 = disabled)")
+
+    # Trading window (ET time, e.g. "09:30" — empty = full session)
+    window_start: str | None = Field(default=None, description="Trading window start time in ET (HH:MM)")
+    window_end: str | None = Field(default=None, description="Trading window end time in ET (HH:MM)")
 
     # EMA / SMA crossover params (fast/slow periods)
     fast_ema: int = Field(default=9, ge=1)
